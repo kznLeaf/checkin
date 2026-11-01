@@ -1,26 +1,22 @@
 package main
 
-// Command mini 是"取微信登录 code + 换晚安成电打卡 ticket"的最小可运行示例。
+// Command mini 是"扫码/复用登录态 → 取 code → 换 ticket → 打卡"的最小可运行示例。
 //
 // 用法：
 //
-//	go run . -buffer login_buffer.txt
-//	go run . -buffer login_buffer.txt -session <SESSION>
-//	go run . -buffer login_buffer.txt -code-only
+//	go run . -session <SESSION>                       # 取 code → 换 ticket
+//	go run . -session <SESSION> -buffer buf.txt       # 复用已有 login_buffer（跳过扫码）
+//	go run . -session <SESSION> -code-only            # 只取一个 code
+//	go run . -session <SESSION> -checkin -lat 30.75 -lng 103.93   # 换到 ticket 后直接打卡
 //
-// 参数：
+// 流程（code 一次性）：
 //
-//	-buffer     login_buffer：文件路径或 base64 文本本身（必填）
-//	-appid      目标小程序 appid，默认晚安成电 wxaa78bf2905f01cee
-//	-session    打卡后端登录态 SESSION cookie 值（可选）
-//	-code-only  只取 code，不请求 ticket
+//	扫码 → login_buffer
+//	code → POST /platform-app/api/auth/checkin-ticket  → ticket（必须带 SESSION）
+//	ticket + SESSION → POST /daily-checkin/api/student-checkin-record/checkin
 //
-// login_buffer 的来源：应用宝扫码登录后换取（见 YYB_GO：POST /qr → /qr/{id}/poll →
-// /qr/{id}/confirm），或者用自己的 openid/accesstoken/refreshtoken 调
-// https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth 换取。
-// 扫码只需一次，之后 login_buffer/凭证都能续期，日常取 code 无需人工。
-//
-// 输出：先打印 code（5 分钟有效、一次性），再打印 ticket。
+// 登录态（SESSION cookie）不由本程序获取，必须通过 -session 传入；
+// 因此每次运行只消耗 1 个 code。
 
 import (
 	"context"
@@ -36,44 +32,83 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("mini: ")
 
-	buffer := flag.String("buffer", "", "login_buffer：文件路径或 base64 文本（必填）")
+	buffer := flag.String("buffer", "", "login_buffer：文件路径或 base64 文本（省略则扫码登录获取）")
 	appID := flag.String("appid", "wxaa78bf2905f01cee", "目标小程序 appid")
-	session := flag.String("session", "", "打卡后端的 SESSION cookie 值（可选）")
-	codeOnly := flag.Bool("code-only", false, "只取 code，不请求 ticket")
+	session := flag.String("session", "", "SESSION cookie 值（必填；-code-only 时可省略）")
+	codeOnly := flag.Bool("code-only", false, "只取 code，不换 ticket")
+	doCheckin := flag.Bool("checkin", false, "拿到 ticket 后直接打卡")
+	lat := flag.Float64("lat", 0, "打卡纬度（-checkin 时必填）")
+	lng := flag.Float64("lng", 0, "打卡经度（-checkin 时必填）")
+	address := flag.String("address", "", "reverseGeocode 文本，可空")
 	flag.Parse()
+
+	// 整体上限放大到 10 分钟：扫码是人工操作，最长要等 5 分钟（见 login.go）。
+	// 握手、HTTP 请求各自的超时仍在函数内部（10~40s）。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 
 	loginBuffer, err := loadLoginBuffer(*buffer)
 	if err != nil {
 		log.Fatal(err)
 	}
+	if loginBuffer == "" {
+		loginBuffer, err = LoginForLoginBuffer(ctx)
+		if err != nil {
+			log.Fatalf("扫码获取 login_buffer 失败: %v", err)
+		}
+		// 打印出来便于保存复用（约 2 小时有效）。
+		fmt.Printf("login_buffer=%s\n", loginBuffer)
+	}
 
-	// 整体上限：握手/登录 + 取 code + 换 ticket；单步超时在各自函数内另有 10~15s。
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
+	if *codeOnly {
+		code, err := GetCode(ctx, loginBuffer, *appID)
+		if err != nil {
+			log.Fatalf("获取 code 失败: %v", err)
+		}
+		fmt.Printf("code=%s\n", code)
+		return
+	}
 
+	// 登录态只从命令行来：缺了就直接报错，不做任何自动登录。
+	sessionID := strings.TrimSpace(*session)
+	if sessionID == "" {
+		log.Fatal("必须用 -session 传入 SESSION cookie 值")
+	}
+
+	// 换 ticket：必须带 SESSION，否则 4006。
 	code, err := GetCode(ctx, loginBuffer, *appID)
 	if err != nil {
 		log.Fatalf("获取 code 失败: %v", err)
 	}
-	// 先输出 code：它 5 分钟内有效且一次性，后面的 ticket 失败也不至于白取。
+	// code 只有 5 分钟有效且一次性，先打印出来，后面失败也不至于白取。
 	fmt.Printf("code=%s\n", code)
 
-	if *codeOnly {
-		return
-	}
-
-	ticket, err := GetCheckinTicket(ctx, *session, code)
+	ticket, err := GetCheckinTicket(ctx, sessionID, code)
 	if err != nil {
 		log.Fatalf("获取 ticket 失败: %v", err)
 	}
 	fmt.Printf("ticket=%s\n", ticket)
+
+	if !*doCheckin {
+		return
+	}
+	result, err := Checkin(ctx, sessionID, ticket, CheckinRequest{
+		Latitude:  *lat,
+		Longitude: *lng,
+		Address:   *address,
+	})
+	if err != nil {
+		log.Fatalf("打卡失败: %v（响应: %s）", err, result)
+	}
+	fmt.Printf("checkin=%s\n", result)
 }
 
 // loadLoginBuffer 支持两种输入：已存在的文件路径，或直接给出的 base64 文本。
+// 返回空串表示没有提供，调用方会走扫码登录。
 func loadLoginBuffer(v string) (string, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return "", fmt.Errorf("必须用 -buffer 提供 login_buffer（文件路径或 base64 文本）")
+		return "", nil
 	}
 	if st, err := os.Stat(v); err == nil && !st.IsDir() {
 		raw, err := os.ReadFile(v)

@@ -11,8 +11,8 @@ package main
 //	     {"code":"<code>"}
 //	→ {"ok":true,"data":{"ticket":"<43 位 base64url>"}}
 //
-// 说明：小程序是"先登录拿到 SESSION，再换 ticket"，所以这里保留了可选的 SESSION Cookie；
-// 若服务端只按 code 校验，sessionID 传空串也能拿到 ticket（以实测为准）。
+// 说明：这个接口要求已登录，缺 SESSION 时会返回 {"code":4006,"msg":"请先登录小程序"}。
+// 登录态不在这里获取：调用方通过 -session 传入已知的 SESSION cookie 值即可。
 
 import (
 	"bytes"
@@ -49,12 +49,13 @@ type apiEnvelope struct {
 // GetCheckinTicket 用一条 wx.login code 换取打卡票据。
 //
 // 参数：
-//   - sessionID：登录后拿到的 SESSION cookie 值，可为空（见文件头说明）
+//   - sessionID：命令行传入的 SESSION cookie 值（必填）
 //   - code：GetCode 返回的小程序 code，一次性，调用前不要重复使用
 //
-// 返回的 ticket 用于拼打卡页地址：
+// 返回的 ticket 有两种用法：
 //
-//	https://jzsz.uestc.edu.cn/daily-checkin-h5/index.html?sessionId=<SESSION>&checkinTicket=<ticket>
+//	网页：  https://jzsz.uestc.edu.cn/daily-checkin-h5/index.html?sessionId=<SESSION>&checkinTicket=<ticket>
+//	接口：  放在打卡请求头 X-Checkin-Ticket 里（见 checkin.go，抓包确认）
 func GetCheckinTicket(ctx context.Context, sessionID, code string) (string, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
