@@ -4,8 +4,9 @@ package main
 //
 // 用法：
 //
-//	go run . -session <SESSION>                       # 取 code → 换 ticket
+//	go run . -session <SESSION>                       # 扫码 → 取 code → 换 ticket
 //	go run . -session <SESSION> -buffer buf.txt       # 复用已有 login_buffer（跳过扫码）
+//	go run . -session <SESSION> -refresh              # 用 token 文件续期并重取 login_buffer（免扫码）
 //	go run . -session <SESSION> -code-only            # 只取一个 code
 //	go run . -session <SESSION> -checkin -lat 30.75 -lng 103.93   # 换到 ticket 后直接打卡
 //
@@ -15,7 +16,11 @@ package main
 //	code → POST /platform-app/api/auth/checkin-ticket  → ticket（必须带 SESSION）
 //	ticket + SESSION → POST /daily-checkin/api/student-checkin-record/checkin
 //
-// 登录态（SESSION cookie）不由本程序获取，必须通过 -session 传入；
+// login_buffer 的来源优先级：-buffer > -refresh（读 token 文件续期）> 扫码。
+// 扫码成功后 token 会写到 -token-file（默认 token.json），之后用 -refresh 即可免扫码；
+// 只有 accesstoken 过期时才会调用 refresh_token_auth 续期，然后重取 login_buffer。
+//
+// 打卡后端的登录态（SESSION cookie）不由本程序获取，必须通过 -session 传入；
 // 因此每次运行只消耗 1 个 code。
 
 import (
@@ -40,6 +45,8 @@ func main() {
 	lat := flag.Float64("lat", 0, "打卡纬度（-checkin 时必填）")
 	lng := flag.Float64("lng", 0, "打卡经度（-checkin 时必填）")
 	address := flag.String("address", "", "reverseGeocode 文本，可空")
+	refresh := flag.Bool("refresh", false, "用 -token-file 续期并重新获取 login_buffer（免扫码）")
+	tokenFile := flag.String("token-file", "token.json", "token 文件路径：扫码后写入，-refresh 时读取")
 	flag.Parse()
 
 	// 整体上限放大到 10 分钟：扫码是人工操作，最长要等 5 分钟（见 login.go）。
@@ -52,9 +59,24 @@ func main() {
 		log.Fatal(err)
 	}
 	if loginBuffer == "" {
-		loginBuffer, err = LoginForLoginBuffer(ctx)
-		if err != nil {
-			log.Fatalf("扫码获取 login_buffer 失败: %v", err)
+		if *refresh {
+			// 免扫码：用 token 文件续期（必要时）后重取 login_buffer。
+			loginBuffer, err = RefreshLoginBuffer(ctx, *tokenFile)
+			if err != nil {
+				log.Fatalf("用 token 续期获取 login_buffer 失败: %v", err)
+			}
+		} else {
+			tokens, lb, err := LoginForLoginBuffer(ctx)
+			if err != nil {
+				log.Fatalf("扫码获取 login_buffer 失败: %v", err)
+			}
+			// 保存 token：之后可以不扫码，直接 -refresh。
+			if err := SaveTokens(*tokenFile, tokens); err != nil {
+				log.Printf("警告: 保存 token 到 %s 失败（本次仍可继续）: %v", *tokenFile, err)
+			} else {
+				fmt.Printf("token_file=%s\n", *tokenFile)
+			}
+			loginBuffer = lb
 		}
 		// 打印出来便于保存复用（约 2 小时有效）。
 		fmt.Printf("login_buffer=%s\n", loginBuffer)

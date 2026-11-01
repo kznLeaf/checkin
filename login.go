@@ -13,21 +13,14 @@ package main
 //	        405 时同时下发 wx_code
 //	④ GET  yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?code=<wx_code>
 //	        → Set-Cookie 里给出 openid / accesstoken / refreshtoken
-//	⑤ POST yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth
-//	        → login_buffer（base64，内含 ticket / device_id / host_appid）
+//	⑤ 用上一步的 token 换 login_buffer（fetchLoginBuffer，见 token.go）
 //
-// login_buffer 约 2 小时后随 accesstoken 失效；用 refresh_token 重新换取
-// login_buffer 的逻辑在 YYB_GO（POST /accounts/refresh），这里只做首次获取。
+// 返回的 OAuthTokens 由调用方落盘（-token-file），之后 -refresh 就能免扫码续期。
 
 import (
-	"bytes"
 	"context"
-	"crypto/md5"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -49,10 +42,6 @@ const (
 	wxQRCodeBase   = "https://open.weixin.qq.com/connect/qrcode/"
 	wxQRPollURL    = "https://long.open.weixin.qq.com/connect/l/qrconnect"
 
-	yybLoginBufferURL = "https://yybadaccess.3g.qq.com/pc_yyb_auth/pcyyb_get_wx_login_buffer_auth"
-	yybBusinessID     = "pc_yyb_auth"
-	yybAccessKey      = "wgrdg373hy26ww2"
-
 	// 二维码在 5 分钟内有效，超时后需要重新生成。
 	qrLoginTimeout = 5 * time.Minute
 )
@@ -63,35 +52,35 @@ var (
 	qrCodePattern = regexp.MustCompile(`wx_code\s*=\s*'([^']*)'`)
 )
 
-// LoginForLoginBuffer 引导用户扫码，返回应用宝下发的 login_buffer。
+// LoginForLoginBuffer 引导用户扫码，返回应用宝的登录态和 login_buffer。
 //
-// 调用时会在终端打印二维码并阻塞等待：扫码 → 手机确认 → 自动换取 login_buffer。
-// 超过 5 分钟未完成会返回超时错误。
-func LoginForLoginBuffer(ctx context.Context) (string, error) {
+// 调用时会在终端打印二维码并阻塞等待：扫码 → 手机确认 → 自动换取 token 和 login_buffer。
+// 超过 5 分钟未完成会返回超时错误。拿到的 token 建议立刻用 SaveTokens 落盘。
+func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return "", err
+		return OAuthTokens{}, "", err
 	}
 	client := &http.Client{Timeout: 15 * time.Second, Jar: jar}
 
 	// ① 打开授权页，从 HTML 里取二维码 uuid。
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, yybOAuthURL, nil)
 	if err != nil {
-		return "", err
+		return OAuthTokens{}, "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("打开微信授权页失败: %w", err)
+		return OAuthTokens{}, "", fmt.Errorf("打开微信授权页失败: %w", err)
 	}
 	page, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return "", err
+		return OAuthTokens{}, "", err
 	}
 	match := qrUUIDPattern.FindStringSubmatch(string(page))
 	if len(match) < 2 {
-		return "", fmt.Errorf("未能从授权页解析出二维码 uuid（微信可能改了页面）")
+		return OAuthTokens{}, "", fmt.Errorf("未能从授权页解析出二维码 uuid（微信可能改了页面）")
 	}
 	uuid := match[1]
 
@@ -105,7 +94,7 @@ func LoginForLoginBuffer(ctx context.Context) (string, error) {
 	var wxCode string
 	for wxCode == "" {
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("二维码超过 %s 未确认，已超时", qrLoginTimeout)
+			return OAuthTokens{}, "", fmt.Errorf("二维码超过 %s 未确认，已超时", qrLoginTimeout)
 		}
 		pollURL := wxQRPollURL + "?" + url.Values{
 			"uuid": {uuid},
@@ -113,14 +102,14 @@ func LoginForLoginBuffer(ctx context.Context) (string, error) {
 		}.Encode()
 		req, err = http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
 		if err != nil {
-			return "", err
+			return OAuthTokens{}, "", err
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0")
 		resp, err := pollClient.Do(req)
 		if err != nil {
 			// 单次长轮询失败（网络抖动/超时）不致命，下一轮继续。
 			if ctx.Err() != nil {
-				return "", ctx.Err()
+				return OAuthTokens{}, "", ctx.Err()
 			}
 			time.Sleep(time.Second)
 			continue
@@ -136,9 +125,9 @@ func LoginForLoginBuffer(ctx context.Context) (string, error) {
 		case 404: // 已扫码，等待手机上点确认
 			fmt.Println("已扫码，请在手机上确认登录…")
 		case 403:
-			return "", fmt.Errorf("已取消登录")
+			return OAuthTokens{}, "", fmt.Errorf("已取消登录")
 		case 402:
-			return "", fmt.Errorf("二维码已过期，请重新运行")
+			return OAuthTokens{}, "", fmt.Errorf("二维码已过期，请重新运行")
 		case 405:
 			if m := qrCodePattern.FindStringSubmatch(string(text)); len(m) == 2 {
 				wxCode = m[1]
@@ -157,12 +146,12 @@ func LoginForLoginBuffer(ctx context.Context) (string, error) {
 	}.Encode()
 	req, err = http.NewRequestWithContext(ctx, http.MethodGet, callback, nil)
 	if err != nil {
-		return "", err
+		return OAuthTokens{}, "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err = client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("OAuth 回调失败: %w", err)
+		return OAuthTokens{}, "", fmt.Errorf("OAuth 回调失败: %w", err)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
@@ -179,69 +168,28 @@ func LoginForLoginBuffer(ctx context.Context) (string, error) {
 	}
 	openid, accessToken := cookies["openid"], cookies["accesstoken"]
 	if openid == "" || accessToken == "" {
-		return "", fmt.Errorf("OAuth 回调没有下发 openid/accesstoken")
+		return OAuthTokens{}, "", fmt.Errorf("OAuth 回调没有下发 openid/accesstoken")
 	}
 
-	// ⑤ 用 openid + accesstoken 换 login_buffer（UAL 签名：md5(body + 时间戳 + key + nonce)）。
-	payload, err := json.Marshal(map[string]any{
-		"extInfo": map[string]any{
-			"listS": map[string]any{
-				"unionid":      map[string]any{"value": []string{openid}},
-				"user_id":      map[string]any{"value": []string{openid}},
-				"access_token": map[string]any{"value": []string{accessToken}},
-			},
-			"listI": map[string]any{"user_type": map[string]any{"value": []int{0}}},
-		},
-	})
-	if err != nil {
-		return "", err
+	// ⑤ 组装登录态：expires_in 取自回调 cookie，缺省按 2 小时。
+	expiresIn, _ := strconv.ParseInt(cookies["expires_in"], 10, 64)
+	if expiresIn <= 0 {
+		expiresIn = defaultTokenTTL
 	}
-	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	nonce := strconv.Itoa(rand.Intn(10000))
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, yybLoginBufferURL, bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Ual-Access-Businessid", yybBusinessID)
-	req.Header.Set("Ual-Access-Timestamp", timestamp)
-	req.Header.Set("Ual-Access-Nonce", nonce)
-	req.Header.Set("Ual-Access-Signature", md5Hex(string(payload)+timestamp+yybAccessKey+nonce))
-	req.Header.Set("Cookie", fmt.Sprintf("openid=%s; accesstoken=%s; refreshtoken=%s",
-		openid, accessToken, cookies["refreshtoken"]))
-
-	resp, err = client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("请求 login_buffer 失败: %w", err)
-	}
-	raw, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return "", err
+	tokens := OAuthTokens{
+		OpenID:       openid,
+		AccessToken:  accessToken,
+		RefreshToken: cookies["refreshtoken"],
+		LoginType:    "WX",
+		ExpiresIn:    expiresIn,
+		ExpiresAt:    time.Now().Unix() + expiresIn,
 	}
 
-	var result struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Ext  struct {
-			ListS struct {
-				LoginBuffer struct {
-					Value []string `json:"value"`
-				} `json:"login_buffer"`
-			} `json:"list_s"`
-		} `json:"ext_info"`
+	loginBuffer, err := fetchLoginBuffer(ctx, tokens)
+	if err != nil {
+		return OAuthTokens{}, "", err
 	}
-	if err = json.Unmarshal(raw, &result); err != nil {
-		return "", fmt.Errorf("login_buffer 响应解析失败: %w（原文: %s）", err, snippet(raw))
-	}
-	if result.Code != 0 {
-		return "", fmt.Errorf("login_buffer 接口返回失败: code=%d msg=%s", result.Code, result.Msg)
-	}
-	if len(result.Ext.ListS.LoginBuffer.Value) == 0 || result.Ext.ListS.LoginBuffer.Value[0] == "" {
-		return "", fmt.Errorf("响应里没有 login_buffer（原文: %s）", snippet(raw))
-	}
-	return result.Ext.ListS.LoginBuffer.Value[0], nil
+	return tokens, loginBuffer, nil
 }
 
 // printQRCode 在终端渲染二维码。ToSmallString(false) 用半角方块，
@@ -255,10 +203,4 @@ func printQRCode(content string) {
 	}
 	fmt.Println(q.ToSmallString(false))
 	fmt.Println("等待扫码…")
-}
-
-// md5Hex 是应用宝 UAL 接口需要的签名：md5(请求体 + 时间戳 + accessKey + nonce)。
-func md5Hex(s string) string {
-	sum := md5.Sum([]byte(s))
-	return hex.EncodeToString(sum[:])
 }
