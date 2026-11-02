@@ -1,4 +1,4 @@
-module mini
+module github.com/kznLeaf/checkin
 
 go 1.27.3
 

@@ -34,8 +34,9 @@ import (
 )
 
 func main() {
+	// TODO: 更好的日志
 	log.SetFlags(0)
-	log.SetPrefix("mini: ")
+	log.SetPrefix("checkin: ")
 
 	buffer := flag.String("buffer", "", "login_buffer：文件路径或 base64 文本（省略则扫码登录获取）")
 	// appID := flag.String("appid", "wxaa78bf2905f01cee", "目标小程序 appid")
