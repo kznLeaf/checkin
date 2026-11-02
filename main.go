@@ -4,11 +4,10 @@ package main
 //
 // 用法：
 //
-//	go run .                            # CAS 登录拿 SESSION → 扫码拿 login_buffer → code → ticket
-//	go run . -refresh                   # 免扫码：用 token.json 续期重取 login_buffer
+//	go run .                            # CAS 登录拿 SESSION → 自动续期 → code → ticket → 打卡
+//	go run . -no-refresh                   # 重新登录，不管是否已经有token.json
 //	go run . -session <SESSION>         # 跳过 CAS 登录，直接用给定 SESSION
 //	go run . -code-only                 # 只取一个 code（不需要 SESSION）
-//	go run . -checkin                   # 换到 ticket 后直接打卡（位置来自 config.yaml）
 //	go run . -buffer buf.txt            # 复用已有 login_buffer（跳过扫码）
 //
 // 流程：
@@ -19,7 +18,7 @@ package main
 //	ticket + SESSION → POST /daily-checkin/api/student-checkin-record/checkin
 //
 // login_buffer 的来源优先级：-buffer > -refresh（读 token 文件续期）> 扫码。
-// 扫码成功后 token 会写到 -token-file（默认 token.json），之后用 -refresh 即可免扫码。
+// 扫码成功后 token 会写到 -token-file（默认工程目录下token.json），默认自动续期
 //
 // 学号/密码/浏览器指纹/经纬度/mmwebid 全部来自 config.yaml（默认当前目录），
 // 与 faq-daily-checkin 工程的配置格式一致，不提供对应的命令行参数。
@@ -43,8 +42,7 @@ func main() {
 	session := flag.String("session", "", "SESSION cookie 值；传入后跳过脚本登录，直接使用该session")
 	configPath := flag.String("config", "config.yaml", "配置文件路径, 默认本目录下的config.yaml")
 	codeOnly := flag.Bool("code-only", false, "只取 code，不换 ticket")
-	doCheckin := flag.Bool("checkin", false, "拿到 ticket 后直接打卡")
-	refresh := flag.Bool("refresh", false, "用 -token-file 续期并重新获取 login_buffer（免扫码）")
+	noRefresh := flag.Bool("no-refresh", false, "强制重新扫码登录应用宝")
 	tokenFile := flag.String("token-file", "token.json", "token 文件路径，扫码后写入本地磁盘，默认token.json")
 	flag.Parse()
 
@@ -62,13 +60,16 @@ func main() {
 		log.Fatal(err)
 	}
 	if loginBuffer == "" {
-		if *refresh {
-			// 启用自动获取 login_buffer
+		if !*noRefresh {
+			// 自动获取 login_buffer(默认)
 			loginBuffer, err = RefreshLoginBuffer(ctx, *tokenFile)
 			if err != nil {
 				log.Fatalf("用 refresh token 获取 login_buffer 失败: %v", err)
+			} else {
+				fmt.Println("成功自动获取login_buffer")
 			}
 		} else {
+			// 重新扫码登录应用宝
 			tokens, lb, err := LoginForLoginBuffer(ctx)
 			if err != nil {
 				log.Fatalf("扫码获取 login_buffer 失败: %v", err)
@@ -82,7 +83,8 @@ func main() {
 			loginBuffer = lb
 		}
 		// 展示 login_buffer. 有效时间约2h
-		fmt.Printf("login_buffer=%s\n", loginBuffer)
+		// loginBuffer 已经保存到了 ./token.json 所以不需要再重新打印
+		// fmt.Printf("login_buffer=%s\n", loginBuffer)
 	}
 
 	if *codeOnly {
@@ -97,11 +99,9 @@ func main() {
 
 	// ② SESSION：如果命令行已经传入则跳过登录步骤，否则用 config.yaml 走 CAS 登录。
 	var cfg Config
-	if strings.TrimSpace(*session) == "" || *doCheckin {
-		cfg, err = LoadConfig(*configPath)
-		if err != nil {
-			log.Fatal(err)
-		}
+	cfg, err = LoadConfig(*configPath)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	sessionID := strings.TrimSpace(*session)
@@ -126,13 +126,9 @@ func main() {
 	}
 	fmt.Printf("ticket=%s\n", ticket)
 
-	// ④ 可选参数：打卡（位置来自 config.yaml）。
-	if !*doCheckin {
-		return
-	}
 	result, err := Checkin(ctx, sessionID, ticket, appID, cfg)
 	if err != nil {
-		log.Fatalf("打卡失败: %v（响应: %s）", err, result)
+		log.Fatalf("打卡失败，晚安成电的原始响应: %s\n", result)
 	}
 	fmt.Printf("checkin=%s\n", result)
 }
