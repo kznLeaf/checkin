@@ -7,9 +7,10 @@ package main
 //	① GET  open.weixin.qq.com/connect/qrconnect
 //	        （appid=应用宝 PC 端的 wxd44977328b36e647，scope 含 snsapi_runtime_pcsdk）
 //	        → 从返回的 HTML 里取二维码 uuid
-//	② 终端渲染二维码：https://open.weixin.qq.com/connect/qrcode/<uuid>
+//	② 下载 https://open.weixin.qq.com/connect/qrcode/<uuid> 的图片二维码，
+//	   用 gozxing 解出里面的 confirm 链接，再把这个链接渲染到终端（用户只需扫一次）
 //	③ 长轮询 long.open.weixin.qq.com/connect/l/qrconnect
-//	        wx_errcode: 408=未扫 404=已扫未确认 405=已确认 403=取消 402=过期
+//	        wx_errcode: 408=未完成扫码 404=已扫未确认 405=已确认 403=取消 402=过期
 //	        405 时同时下发 wx_code
 //	④ GET  yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?code=<wx_code>
 //	        → Set-Cookie 里给出 openid / accesstoken / refreshtoken
@@ -20,14 +21,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg" // 微信 connect/qrcode 返回的是 JPEG
+	_ "image/png"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/makiuchi-d/gozxing"
+	zxingqr "github.com/makiuchi-d/gozxing/qrcode"
 	"github.com/skip2/go-qrcode"
 )
 
@@ -85,7 +92,18 @@ func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 	uuid := match[1]
 
 	// ② 终端打印二维码；同时给出链接，渲染失败时也能手动打开。
+	// get 该URL将会得到一个没有后缀的文件，这个其实忽略了后缀：.jpg
+	// 本质是一张用于扫码登录的二维码图片。
+	// 思路：获取该文件之后，手动重命名为jpg, 然后用 gozxing 解析获取其中包含的内容
+	// (内容示例 https://open.weixin.qq.com/connect/confirm?uuid=041pfLxH32iYkSSS)
+	// 最后将这个内容传入 printQRCode, 通过这种方式将二维码转移到终端打印出来
 	qrContent := wxQRCodeBase + uuid
+	if confirmURL, err := fetchQRCodeContent(ctx, client, qrContent); err == nil {
+		qrContent = confirmURL
+		fmt.Println("用微信扫描下面的二维码：")
+	} else {
+		fmt.Printf("警告: 自动解析二维码图片失败，回退为打印原始链接。请手动访问该链接: %v\n", err)
+	}
 	printQRCode(qrContent)
 
 	// ③ 长轮询等待扫码。长轮询本身会挂 20~30 秒，所以单独用一个超时更长的 client。
@@ -192,11 +210,7 @@ func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 	return tokens, loginBuffer, nil
 }
 
-// printQRCode 在终端渲染二维码。ToSmallString(false) 用半角方块，
-// 深色终端下会显示为"亮码"，微信、手机相机都能识别；同时打印链接便于手动打开。
-// TODO: 这里展示的二维码，包含的内容是“目标二维码的地址”
-// 也就是说用户需要先扫描一次，然后再扫描目标二维码?
-// 太臃肿了。尝试改成：直接将目标二维码的图像转换为半角方块
+// printQRCode 在终端打印二维码，内容为content
 func printQRCode(content string) {
 	fmt.Printf("请用微信扫码登录应用宝（或直接打开）：\n%s\n\n", content)
 	q, err := qrcode.New(content, qrcode.Medium)
@@ -206,4 +220,43 @@ func printQRCode(content string) {
 	}
 	fmt.Println(q.ToSmallString(false))
 	fmt.Println("等待扫码…")
+}
+
+// fetchQRCodeContent 下载 connect/qrcode/<uuid> 返回的二维码图片，并用 gozxing 解出图片里的 URL。
+//
+// 该接口返回的是无扩展名的 JPEG（Content-Type: image/jpeg），内容是一张指向
+// https://open.weixin.qq.com/connect/confirm?uuid=... 的二维码；直接扫它需要再扫一次，
+// 解出 URL 后重新渲染就能让用户只扫一次。
+func fetchQRCodeContent(ctx context.Context, client *http.Client, imageURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("获取登录二维码图片失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("获取登录二维码图片失败: HTTP %d", resp.StatusCode)
+	}
+
+	img, _, err := image.Decode(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("二维码图片解码失败: %w", err)
+	}
+	bitmap, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", fmt.Errorf("二维码图片转换失败: %w", err)
+	}
+	result, err := zxingqr.NewQRCodeReader().Decode(bitmap, nil)
+	if err != nil {
+		return "", fmt.Errorf("识别二维码失败: %w", err)
+	}
+	content := strings.TrimSpace(result.GetText())
+	if content == "" {
+		return "", fmt.Errorf("二维码内容为空")
+	}
+	return content, nil
 }

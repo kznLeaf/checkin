@@ -32,6 +32,7 @@ type Config struct {
 		Latitude  float64 `yaml:"latitude"`
 		Longitude float64 `yaml:"longitude"`
 	} `yaml:"position"`
+	// NOTE: Time字段还没有被使用过，暂不加入自动定时打卡功能
 	Time struct {
 		Start string `yaml:"start"`
 		End   string `yaml:"end"`

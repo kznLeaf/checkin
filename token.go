@@ -30,7 +30,8 @@ const (
 	yybAccessKey      = "wgrdg373hy26ww2"
 
 	// accesstoken 默认 2 小时；续期提前 5 分钟触发，避免临界失败。
-	defaultTokenTTL  = 7200
+	// 加一分钟是为了跟标准过期时间区分
+	defaultTokenTTL  = 7201
 	refreshAheadSecs = 300
 )
 
