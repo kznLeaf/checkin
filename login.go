@@ -242,6 +242,9 @@ func fetchQRCodeContent(ctx context.Context, client *http.Client, imageURL strin
 		return "", fmt.Errorf("获取登录二维码图片失败: HTTP %d", resp.StatusCode)
 	}
 
+	// image.Decode 支持自动嗅探图像的格式。
+	// 这很重要，因为 imageURL 返回的图片不包含后缀，但是是一个jpg图像
+	// 得益于自动嗅探，这里不需要编写额外的代码就能正常解析.
 	img, _, err := image.Decode(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("二维码图片解码失败: %w", err)
