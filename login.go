@@ -194,6 +194,9 @@ func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 
 // printQRCode 在终端渲染二维码。ToSmallString(false) 用半角方块，
 // 深色终端下会显示为"亮码"，微信、手机相机都能识别；同时打印链接便于手动打开。
+// TODO: 这里展示的二维码，包含的内容是“目标二维码的地址”
+// 也就是说用户需要先扫描一次，然后再扫描目标二维码?
+// 太臃肿了。尝试改成：直接将目标二维码的图像转换为半角方块
 func printQRCode(content string) {
 	fmt.Printf("请用微信扫码登录应用宝（或直接打开）：\n%s\n\n", content)
 	q, err := qrcode.New(content, qrcode.Medium)
