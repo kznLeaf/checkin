@@ -45,12 +45,15 @@ type OAuthTokens struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
-// SaveTokens 把 token 写回文件（权限 0600：它等价于账号密码）。
+// SaveTokens 把 token 写回文件
 func SaveTokens(path string, t OAuthTokens) error {
 	raw, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
 		return err
 	}
+	// 0600: (U)ser / owner can read, can write and can't execute.
+	// (G)roup can't read, can't write and can't execute.
+	// (O)thers can't read, can't write and can't execute.
 	return os.WriteFile(path, append(raw, '\n'), 0o600)
 }
 
@@ -72,7 +75,7 @@ func LoadTokens(path string) (OAuthTokens, error) {
 
 // RefreshLoginBuffer 用 token 文件续期并重新换一个 login_buffer。
 //
-// accesstoken 还有效（剩余 > 5 分钟）时直接用；否则先调 refresh_token_auth，
+// accesstoken 还有效（剩余 > 5 分钟）时直接用；否则先换取新token,
 // 把新 token 写回文件后再换 login_buffer。
 func RefreshLoginBuffer(ctx context.Context, tokenFile string) (string, error) {
 	t, err := LoadTokens(tokenFile)
@@ -83,7 +86,7 @@ func RefreshLoginBuffer(ctx context.Context, tokenFile string) (string, error) {
 		if err = refreshAccessToken(ctx, &t); err != nil {
 			return "", err
 		}
-		// refresh_token 可能被轮换，必须落盘。
+		// 写回tokens到tokenFile
 		if err = SaveTokens(tokenFile, t); err != nil {
 			return "", fmt.Errorf("保存续期后的 token 失败: %w", err)
 		}

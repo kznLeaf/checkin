@@ -1,3 +1,10 @@
+## 获取 login buffer
+
+1. 取 uuid：GET 应用宝的 qrconnect 授权页（appid=wxd44977328b36e647，scope 含 snsapi_runtime_pcsdk），从 HTML 里正则抓 `/connect/qrcode/<uuid>`。 
+2. 打印二维码：内容就是 `https://open.weixin.qq.com/connect/qrcode/<uuid>` ，用你给的 ToSmallString(false) 渲染到终端，同时把链接也打出来。
+3. 长轮询：`long.open.weixin.qq.com/connect/l/qrconnect?uuid=…`，按 `wx_errcode` 分支：408 未扫、404 已扫待确认、405 确认并下发 wx_code、403 取消、402 过期；5 分钟超时。
+4. 换 cookie：拿 `wx_code` 回 pcyyb_oauth，同一个 cookie jar 里捞出 openid / accesstoken / refreshtoken。
+5. 换 login_buffer：`POST pcyyb_get_wx_login_buffer_auth`，带 Ual-Access-* 头（签名 = md5(body + 时间戳 + key + nonce)），从 `ext_info.list_s.login_buffer.value[0]` 取出 buffer。 之后 main 会自动接着 GetCode（HTTPDNS → 握手 → manualauth → 0-RTT js-login）和 GetCheckinTicket。
 
 ## 自动登录微信 → 取 code 的逻辑
 
@@ -24,15 +31,6 @@
 | [main.go](mini/main.go#L35) | CLI：`-buffer`（文件或 base64）、`-appid`、`-session`、`-code-only`；先打印 code 再取 ticket |
 | [transport.go](mini/transport.go#L68) | `Target`、最简 `dialTCP`（直连，代理参数忽略）、HTTPDNS 解析（含已知 IP 兜底） |
 | `wire_*.go` | 6 个文件，协议原语（记录/握手/PSK/HKDF/AES-GCM/protobuf/LZ4/shortlink/transfer），从 `YYB_GO` **原样搬入**、只删了手机号与云函数相关的构建函数 |
-
-## 获取 login buffer
-
-1. 取 uuid：GET 应用宝的 qrconnect 授权页（appid=wxd44977328b36e647，scope 含 snsapi_runtime_pcsdk），从 HTML 里正则抓 `/connect/qrcode/<uuid>`。 
-2. 打印二维码：内容就是 `https://open.weixin.qq.com/connect/qrcode/<uuid>` ，用你给的 ToSmallString(false) 渲染到终端，同时把链接也打出来。
-3. 长轮询：long.open.weixin.qq.com/connect/l/qrconnect?uuid=…，按 wx_errcode 分支：408 未扫、404 已扫待确认、405 确认并下发 wx_code、403 取消、402 过期；5 分钟超时。
-4. 换 cookie：拿 wx_code 回 pcyyb_oauth，同一个 cookie jar 里捞出 openid / accesstoken / refreshtoken。
-5. 换 login_buffer：POST pcyyb_get_wx_login_buffer_auth，带 Ual-Access-* 头（签名 = md5(body + 时间戳 + key + nonce)），从 ext_info.list_s.login_buffer.value[0] 取出 buffer。 之后 main 会自动接着 GetCode（HTTPDNS → 握手 → manualauth → 0-RTT js-login）和 GetCheckinTicket。
-
 
 ## refresh功能新增/改动
 

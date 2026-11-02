@@ -17,11 +17,10 @@ package main
 //	ticket + SESSION → POST /daily-checkin/api/student-checkin-record/checkin
 //
 // login_buffer 的来源优先级：-buffer > -refresh（读 token 文件续期）> 扫码。
-// 扫码成功后 token 会写到 -token-file（默认 token.json），之后用 -refresh 即可免扫码；
-// 只有 accesstoken 过期时才会调用 refresh_token_auth 续期，然后重取 login_buffer。
+// 扫码成功后 refresh_token 会写到 -token-file（token.json），后续用 -refresh 即可免扫码；
+// 只有 accesstoken 过期时才会调用 refresh_token_auth 续期，然后重新获取 login_buffer。
 //
-// 打卡后端的登录态（SESSION cookie）不由本程序获取，必须通过 -session 传入；
-// 因此每次运行只消耗 1 个 code。
+// 暂时还没有实现自动获取 session cookie 的逻辑，需要通过 -session 手动传入.
 
 import (
 	"context"
@@ -46,10 +45,10 @@ func main() {
 	lng := flag.Float64("lng", 0, "打卡经度（-checkin 时必填）")
 	address := flag.String("address", "", "reverseGeocode 文本，可空")
 	refresh := flag.Bool("refresh", false, "用 -token-file 续期并重新获取 login_buffer（免扫码）")
-	tokenFile := flag.String("token-file", "token.json", "token 文件路径：扫码后写入，-refresh 时读取")
+	tokenFile := flag.String("token-file", "token.json", "token 文件路径，扫码后写入本地磁盘，默认token.json")
 	flag.Parse()
 
-	// 整体上限放大到 10 分钟：扫码是人工操作，最长要等 5 分钟（见 login.go）。
+	// 整体上限 10min, 二维码的有效时间是5min
 	// 握手、HTTP 请求各自的超时仍在函数内部（10~40s）。
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -60,17 +59,17 @@ func main() {
 	}
 	if loginBuffer == "" {
 		if *refresh {
-			// 免扫码：用 token 文件续期（必要时）后重取 login_buffer。
+			// 启用自动获取 login_buffer
 			loginBuffer, err = RefreshLoginBuffer(ctx, *tokenFile)
 			if err != nil {
-				log.Fatalf("用 token 续期获取 login_buffer 失败: %v", err)
+				log.Fatalf("用 refresh token 获取 login_buffer 失败: %v", err)
 			}
 		} else {
 			tokens, lb, err := LoginForLoginBuffer(ctx)
 			if err != nil {
 				log.Fatalf("扫码获取 login_buffer 失败: %v", err)
 			}
-			// 保存 token：之后可以不扫码，直接 -refresh。
+			// 保存 token, 下次打卡可以不扫码，直接使用已有的token获取loginbuffer
 			if err := SaveTokens(*tokenFile, tokens); err != nil {
 				log.Printf("警告: 保存 token 到 %s 失败（本次仍可继续）: %v", *tokenFile, err)
 			} else {
@@ -83,6 +82,7 @@ func main() {
 	}
 
 	if *codeOnly {
+		// 只获取 code，获取成功之后马上退出
 		code, err := GetCode(ctx, loginBuffer, *appID)
 		if err != nil {
 			log.Fatalf("获取 code 失败: %v", err)
@@ -125,13 +125,13 @@ func main() {
 	fmt.Printf("checkin=%s\n", result)
 }
 
-// loadLoginBuffer 支持两种输入：已存在的文件路径，或直接给出的 base64 文本。
-// 返回空串表示没有提供，调用方会走扫码登录。
+// loadLoginBuffer 输入命令行传入的login_buffer文件路径
 func loadLoginBuffer(v string) (string, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return "", nil
 	}
+	// 检查
 	if st, err := os.Stat(v); err == nil && !st.IsDir() {
 		raw, err := os.ReadFile(v)
 		if err != nil {
