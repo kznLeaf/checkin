@@ -123,8 +123,8 @@ func GetCheckinTicket(ctx context.Context, sessionID, code string) (string, erro
 // snippet 截断响应原文，避免把整页 HTML 打进错误信息。
 func snippet(raw []byte) string {
 	s := strings.TrimSpace(string(raw))
-	if len(s) > 200 {
-		return s[:200] + "..."
+	if len(s) > 1000 {
+		return s[:1000] + "..."
 	}
 	return s
 }
