@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -134,9 +135,9 @@ func refreshAccessToken(ctx context.Context, t *OAuthTokens) error {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 		User struct {
-			AccessToken  string `json:"access_token"`
-			RefreshToken string `json:"refresh_token"`
-			ExpiresIn    int64  `json:"expires_in"`
+			AccessToken  string    `json:"access_token"`
+			RefreshToken string    `json:"refresh_token"`
+			ExpiresIn    flexInt64 `json:"expires_in"`
 		} `json:"user_info"`
 	}
 	if err = json.Unmarshal(raw, &result); err != nil {
@@ -156,9 +157,27 @@ func refreshAccessToken(ctx context.Context, t *OAuthTokens) error {
 	if result.User.ExpiresIn <= 0 {
 		result.User.ExpiresIn = defaultTokenTTL
 	}
-	t.ExpiresIn = result.User.ExpiresIn
-	t.ExpiresAt = time.Now().Unix() + result.User.ExpiresIn
+	t.ExpiresIn = int64(result.User.ExpiresIn)
+	t.ExpiresAt = time.Now().Unix() + int64(result.User.ExpiresIn)
 	return nil
+}
+
+// flexInt64 服务端会把 expires_in 写为string类型，导致无法解析为int64
+// （续期接口实际返回的是 "expires_in":"7200"，不是数字）。
+type flexInt64 int64
+
+func (n *flexInt64) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(data)), `"`)
+	if s == "" || s == "null" {
+		*n = 0
+		return nil
+	}
+	if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+		*n = flexInt64(v)
+		return nil
+	} else {
+		return fmt.Errorf("无法解析整数 %q: %w", s, err)
+	}
 }
 
 // fetchLoginBuffer 用 openid + accesstoken 换 login_buffer（扫码流程与续期流程共用）。
