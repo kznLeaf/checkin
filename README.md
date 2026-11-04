@@ -15,6 +15,7 @@
 - `position`：上报给打卡接口
 - `time`: 预留，用于自动定时打卡，这个功能还没有实现，留个占位符即可。
 - `mmwebid`: 三位或四位数字，用于 UA 头部，随便填写一个固定的数字即可。
+- `telegram_bot`(可选): 输入 Telegram bot 的`token`和`chatID`，获取`chatID`的方法见[这里](https://stackoverflow.com/questions/32423837/telegram-bot-how-to-get-a-group-chat-id)，打卡成功会推送一条 Telegram 通知。
 
 第一次启动程序会在终端打印一个二维码用于登录应用宝，微信扫码之后即可完成整个流程。获取的 token 将保存到项目目录的`token.json`中，此后运行程序只要 token 还没有过期就不需要再扫码登录。如果出现 `token 续期被拒绝 ... 请重新扫码`，说明 refresh token 已失效，重新扫码登录一次即可恢复。
 

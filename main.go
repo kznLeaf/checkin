@@ -5,10 +5,10 @@ package main
 // 用法：
 //
 //	go run .                            # CAS 登录拿 SESSION → 自动续期 → code → ticket → 打卡
-//	go run . -no-refresh                   # 重新登录，不管是否已经有token.json
-//	go run . -session <SESSION>         # 跳过 CAS 登录，直接用给定 SESSION
-//	go run . -code-only                 # 只取一个 code（不需要 SESSION）
-//	go run . -buffer buf.txt            # 复用已有 login_buffer（跳过扫码）
+//	go run . -no-refresh                # 强制重新扫码登录，不管是否已经有token.json
+//	go run . -session <SESSION>         # 直接用给定session cookie，跳过自动获取的步骤
+//	go run . -code-only                 # 获取 code 后直接结束
+//	go run . -buffer buf.txt            # 复用已有 login_buffer(需要确保没有过期)
 //
 // 流程：
 //
@@ -20,18 +20,26 @@ package main
 // login_buffer 的来源优先级：-buffer > -refresh（读 token 文件续期）> 扫码。
 // 扫码成功后 token 会写到 -token-file（默认工程目录下token.json），默认自动续期
 //
-// 学号/密码/浏览器指纹/经纬度/mmwebid 全部来自 config.yaml（默认当前目录），
-// 与 faq-daily-checkin 工程的配置格式一致，不提供对应的命令行参数。
+// 学号/密码/浏览器指纹/经纬度/mmwebid 全部来自 config.yaml
+//
+// 可选：config.yaml 里填写 telegram_bot 后，打卡成功后会给 bot 发一条通知
 
 import (
 	"context"
 	"flag"
 	"fmt"
 	"log"
-	"os"
-	"strings"
 	"time"
 )
+
+type runOptions struct {
+	buffer    string // -buffer
+	session   string // -session
+	tokenFile string // -token-file
+	noRefresh bool   // -no-refresh
+	codeOnly  bool   // -code-only
+	appID     string
+}
 
 func main() {
 	// TODO: 更好的日志
@@ -39,7 +47,6 @@ func main() {
 	log.SetPrefix("checkin: ")
 
 	buffer := flag.String("buffer", "", "login_buffer：文件路径或 base64 文本（省略则扫码登录获取）")
-	// appID := flag.String("appid", "wxaa78bf2905f01cee", "目标小程序 appid")
 	session := flag.String("session", "", "SESSION cookie 值；传入后跳过脚本登录，直接使用该session")
 	configPath := flag.String("config", "config.yaml", "配置文件路径, 默认本目录下的config.yaml")
 	codeOnly := flag.Bool("code-only", false, "只取 code，不换 ticket")
@@ -47,109 +54,48 @@ func main() {
 	tokenFile := flag.String("token-file", "token.json", "token 文件路径，扫码后写入本地磁盘，默认token.json")
 	flag.Parse()
 
-	// 硬编码。本程序只用于晚安成电打卡。
-	appID := "wxaa78bf2905f01cee"
-
 	// 整体上限 10min, 二维码的有效时间是5min
-	// 握手、HTTP 请求各自的超时仍在函数内部（10~40s）。
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// ① login_buffer：-buffer > -refresh > 扫码。
-	loginBuffer, err := loadLoginBuffer(*buffer)
+	cfg, err := LoadConfig(*configPath)
 	if err != nil {
-		log.Fatal(err)
-	}
-	if loginBuffer == "" {
-		if !*noRefresh {
-			// 自动获取 login_buffer(默认)
-			loginBuffer, err = RefreshLoginBuffer(ctx, *tokenFile)
-			if err != nil {
-				log.Fatalf("用 refresh token 获取 login_buffer 失败: %v", err)
-			} else {
-				fmt.Println("成功自动获取login_buffer")
-			}
-		} else {
-			// 重新扫码登录应用宝
-			tokens, lb, err := LoginForLoginBuffer(ctx)
-			if err != nil {
-				log.Fatalf("扫码获取 login_buffer 失败: %v", err)
-			}
-			// 保存 token, 下次打卡可以不扫码，直接使用已有的 token 获取 login_buffer
-			if err := SaveTokens(*tokenFile, tokens); err != nil {
-				log.Printf("警告: 保存 token 到 %s 失败（本次仍可继续）: %v", *tokenFile, err)
-			} else {
-				fmt.Printf("token_file=%s\n", *tokenFile)
-			}
-			loginBuffer = lb
+		if !*codeOnly {
+			log.Fatal(err)
 		}
-		// 展示 login_buffer. 有效时间约2h
-		// loginBuffer 已经保存到了 ./token.json 所以不需要再重新打印
-		// fmt.Printf("login_buffer=%s\n", loginBuffer)
+		cfg = Config{}
 	}
 
-	if *codeOnly {
-		// 只获取 code，获取成功之后马上退出
-		code, err := GetCode(ctx, loginBuffer, appID)
-		if err != nil {
-			log.Fatalf("获取 code 失败: %v", err)
+	result, err := run(ctx, cfg, runOptions{
+		buffer:    *buffer,
+		session:   *session,
+		tokenFile: *tokenFile,
+		noRefresh: *noRefresh,
+		codeOnly:  *codeOnly,
+		appID:     "wxaa78bf2905f01cee",
+	})
+	if err != nil {
+		log.Print(err)
+		if cfg.TelegramBot.Enabled() {
+			// 将错误信息通知给Telegram bot
+			t := currentTime()
+			msg := fmt.Sprintf("[%s] %s", t, err.Error())
+			if sendErr := sendTelegramMessage(cfg.TelegramBot.Token, cfg.TelegramBot.ChatID, msg); sendErr != nil {
+				log.Printf("发送 Telegram 消息失败: %v", sendErr)
+			}
+			fmt.Println("成功将报错上报bot")
 		}
-		fmt.Printf("code=%s\n", code)
 		return
 	}
 
-	// ② SESSION：如果命令行已经传入则跳过登录步骤，否则用 config.yaml 走 CAS 登录。
-	var cfg Config
-	cfg, err = LoadConfig(*configPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	sessionID := strings.TrimSpace(*session)
-	if sessionID == "" {
-		if sessionID, err = GetSessionCookie(ctx, cfg); err != nil {
-			log.Fatalf("自动登录获取 SESSION 失败: %v", err)
+	if result != "" && cfg.TelegramBot.Enabled() {
+		// 拼接发送给 bot 的信息
+		message := fmt.Sprintf("%s 打卡成功\n服务端响应: %s",
+			currentTime(),
+			result)
+		if err := sendTelegramMessage(cfg.TelegramBot.Token, cfg.TelegramBot.ChatID, message); err != nil {
+			log.Fatalf("发送 Telegram 消息失败: %v", err)
 		}
-		fmt.Printf("session=%s\n", sessionID)
+		fmt.Println("上报本次打卡信息给bot")
 	}
-
-	// ③ 换 ticket：必须带 SESSION，否则 4006。
-	code, err := GetCode(ctx, loginBuffer, appID)
-	if err != nil {
-		log.Fatalf("获取 code 失败: %v", err)
-	}
-	// code 只有 5 分钟有效且一次性，先打印出来，后面失败也不至于白取。
-	fmt.Printf("code=%s\n", code)
-
-	ticket, err := GetCheckinTicket(ctx, sessionID, code)
-	if err != nil {
-		log.Fatalf("获取 ticket 失败: %v", err)
-	}
-	fmt.Printf("ticket=%s\n", ticket)
-
-	result, err := Checkin(ctx, sessionID, ticket, appID, cfg)
-	if err != nil {
-		log.Fatalf("打卡失败，晚安成电的原始响应: %s\n", result)
-	}
-	fmt.Printf("checkin=%s\n", result)
-}
-
-// loadLoginBuffer 输入命令行传入的 login_buffer 文件路径(e.g. `buf.txt`) 或已经取得的login_buffer string
-func loadLoginBuffer(v string) (string, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return "", nil
-	}
-	// 检查
-	if st, err := os.Stat(v); err == nil && !st.IsDir() {
-		raw, err := os.ReadFile(v)
-		if err != nil {
-			return "", fmt.Errorf("读取 login_buffer 文件失败: %w", err)
-		}
-		v = strings.TrimSpace(string(raw))
-		if v == "" {
-			return "", fmt.Errorf("login_buffer 文件为空")
-		}
-	}
-	return v, nil
 }

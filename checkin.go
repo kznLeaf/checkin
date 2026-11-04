@@ -65,12 +65,11 @@ func Checkin(ctx context.Context, sessionID, ticket, appID string, cfg Config) (
 	// 因为服务端不会检验这个HTTP头，凑数用的
 	referer := checkinSiteURL + checkinH5Path + "?sessionId=" + randomUUID()
 
-	now := time.Now().In(shanghaiLocation())
 	body, err := json.Marshal(map[string]any{
 		"latitude":             addRealisticDrift(cfg.Position.Latitude),
 		"longitude":            addRealisticDrift(cfg.Position.Longitude),
 		"reverseGeocode":       checkinAddress,
-		"clientTime":           now.Format("2006-01-02 15:04:05"),
+		"clientTime":           currentTime(),
 		"userAgent":            userAgent,
 		"coordinateSystemCode": "gcj02",
 		"accuracy":             30,
@@ -121,7 +120,6 @@ func Checkin(ctx context.Context, sessionID, ticket, appID string, cfg Config) (
 		return text, fmt.Errorf("打卡接口 HTTP %d: %s", resp.StatusCode, snippet(raw))
 	}
 
-	// 与 Python 版一致的判定：code==0 且 ok==true 才算成功。
 	var result struct {
 		Code int    `json:"code"`
 		OK   bool   `json:"ok"`
@@ -159,12 +157,11 @@ func addRealisticDrift(value float64) float64 {
 	return math.Round((value+drift)*1e6) / 1e6
 }
 
-// shanghaiLocation 返回 Asia/Shanghai 时区；系统缺少 tzdata 时退回固定 +8 区。
-func shanghaiLocation() *time.Location {
-	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
-		return loc
-	}
-	return time.FixedZone("CST", 8*3600)
+// currentTime 字符串形式返回当前时间
+func currentTime() string {
+	east8Zone := time.FixedZone("CST", 8*3600)
+	now := time.Now().In(east8Zone)
+	return now.Format("2006-01-02 15:04:05")
 }
 
 // randomUUID 生成 v4 UUID，用于打卡页 Referer 里的 sessionId。

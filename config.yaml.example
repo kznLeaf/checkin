@@ -8,3 +8,6 @@ time:
   start: "21:00"
   end: "22:30"
 mmwebid: 578
+telegram_bot:
+  token: "YOUR_TOKEN"
+  chat_id: "YOUR_CHAT_ID" 

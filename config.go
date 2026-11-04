@@ -18,6 +18,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -37,6 +38,27 @@ type Config struct {
 		Start string `yaml:"start"`
 		End   string `yaml:"end"`
 	} `yaml:"time"`
+	TelegramBot TelegramBotConfig `yaml:"telegram_bot"`
+}
+
+const (
+	defaultTelegramToken  = "YOUR_TOKEN"
+	defaultTelegramChatID = "YOUR_CHAT_ID"
+)
+
+type TelegramBotConfig struct {
+	Token  string `yaml:"token"`
+	ChatID string `yaml:"chat_id"`
+}
+
+// Enabled 判断用户是否填写了telegram_bot
+func (t TelegramBotConfig) Enabled() bool {
+	token := strings.TrimSpace(t.Token)
+	chatID := strings.TrimSpace(t.ChatID)
+	if token == "" || chatID == "" {
+		return false
+	}
+	return token != defaultTelegramToken && chatID != defaultTelegramChatID
 }
 
 // LoadConfig 读取并解析 config.yaml
