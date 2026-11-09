@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件是 MMTLS 的密钥派生（HKDF / ExpandLabel）、AES-GCM 记录加解密与曲线原语。
 

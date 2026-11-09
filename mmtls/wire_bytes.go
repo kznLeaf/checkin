@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件是 protobuf 变长整数/长度字段与 LZ4 的最小编解码，逻辑与 YYB_GO 的 protocol 包一致。
 

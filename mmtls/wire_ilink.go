@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件是应用层编码：login_buffer、manualauth 请求体、transfer 信封与 js-login 明文。
 
@@ -54,7 +54,7 @@ type manualAuthTemp struct {
 	CompBody  []byte
 }
 
-type AppSession struct {
+type appSession struct {
 	SendKey   []byte
 	RecvKey   []byte
 	F9        []byte
@@ -316,25 +316,25 @@ func hybridECDHDecrypt(response []byte, temp *manualAuthTemp) ([]byte, error) {
 	return lz4Decompress(comp)
 }
 
-func extractSession(mar []byte) (AppSession, error) {
+func extractSession(mar []byte) (appSession, error) {
 	F := pbParse(mar)
 	f3, ok := F[3].([]byte)
 	if !ok {
-		return AppSession{}, fmt.Errorf("ManualAuthResponse missing f3")
+		return appSession{}, fmt.Errorf("ManualAuthResponse missing f3")
 	}
 	body := pbParse(f3)
 	body2, ok := body[2].([]byte)
 	if !ok {
-		return AppSession{}, fmt.Errorf("ManualAuthResponse missing session block")
+		return appSession{}, fmt.Errorf("ManualAuthResponse missing session block")
 	}
 	body3, ok := body[3].([]byte)
 	if !ok {
-		return AppSession{}, fmt.Errorf("ManualAuthResponse missing identity block")
+		return appSession{}, fmt.Errorf("ManualAuthResponse missing identity block")
 	}
 	sess := pbParse(body2)
 	ident := pbParse(body3)
 	uin, _ := ident[1].(int64)
-	out := AppSession{
+	out := appSession{
 		SendKey:  safeBytes(sess[1]),
 		RecvKey:  safeBytes(sess[2]),
 		F9:       safeBytes(sess[9]),
@@ -343,7 +343,7 @@ func extractSession(mar []byte) (AppSession, error) {
 		DeviceID: append([]byte(nil), ilinkDevice...),
 	}
 	if len(out.SendKey) == 0 || len(out.RecvKey) == 0 || out.UIN == 0 {
-		return AppSession{}, fmt.Errorf("ManualAuthResponse session fields incomplete")
+		return appSession{}, fmt.Errorf("ManualAuthResponse session fields incomplete")
 	}
 	return out, nil
 }
@@ -409,7 +409,7 @@ func sessionWpkgHead(uin int64, f9, deviceID []byte) []byte {
 	return wpkgHead(ints, map[int][]byte{14: []byte{}, 24: deviceID, 27: f9})
 }
 
-func buildTransferPacket(session AppSession, plaintext []byte) ([]byte, error) {
+func buildTransferPacket(session appSession, plaintext []byte) ([]byte, error) {
 	enc, err := aesGCMEncryptLayout(session.SendKey, nil, lz4AllLiteral(plaintext))
 	if err != nil {
 		return nil, err

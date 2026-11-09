@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件只做两件事：把微信域名解析成可连接的 IP:Port（HTTPDNS），以及提供最简的 TCP 拨号。
 // 原实现里的 SOCKS5 / HTTP CONNECT 代理、DNS 缓存、并发控制在这里全部去掉。
@@ -17,8 +17,8 @@ import (
 	"time"
 )
 
-// Target 是一个可直连的服务器地址。
-type Target struct {
+// target 是一个可直连的服务器地址。
+type target struct {
 	IP   string
 	Port int
 }
@@ -65,7 +65,7 @@ type dnsResponse struct {
 //
 // 返回的顺序就是后续尝试连接的顺序：长连接按 8080 > 80 > 443 > 5000 的端口优先级排，
 // 短连接只要 80 端口。HTTPDNS 走不通时短连接回落到已知 IP，长连接只能报错。
-func resolveTargets(ctx context.Context, timeout time.Duration) (longTargets, shortTargets []Target, err error) {
+func resolveTargets(ctx context.Context, timeout time.Duration) (longTargets, shortTargets []target, err error) {
 	query := url.Values{
 		"clientversion": {"0"},
 		"devicetype":    {"Windows"},
@@ -99,7 +99,7 @@ func resolveTargets(ctx context.Context, timeout time.Duration) (longTargets, sh
 				if domain.Name == shortlinkDomain && port != 80 {
 					continue
 				}
-				t := Target{IP: ip.IP, Port: port}
+				t := target{IP: ip.IP, Port: port}
 				if domain.Name == longlinkDomain {
 					longTargets = append(longTargets, t)
 				} else {
@@ -122,7 +122,7 @@ func resolveTargets(ctx context.Context, timeout time.Duration) (longTargets, sh
 	}
 
 	if len(shortTargets) == 0 {
-		shortTargets = []Target{{IP: shortlinkFallbackIP, Port: 80}}
+		shortTargets = []target{{IP: shortlinkFallbackIP, Port: 80}}
 	}
 	return longTargets, shortTargets, nil
 }

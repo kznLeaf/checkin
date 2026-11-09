@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件是 MMTLS 1-RTT 客户端：握手、PSK 提取、shortlink 收发。
 
@@ -323,8 +323,8 @@ func (m *mmtlsClient) recvApp() (shortlinkPacket, error) {
 	return parseShortlink(pt)
 }
 
-func connectMmtls(ctx context.Context, target Target, timeout time.Duration, tcpProxy string, fallbackDirect bool) (*mmtlsClient, error) {
-	conn, err := dialTCP(ctx, target.IP, target.Port, timeout, tcpProxy, fallbackDirect)
+func connectMmtls(ctx context.Context, t target, timeout time.Duration, tcpProxy string, fallbackDirect bool) (*mmtlsClient, error) {
+	conn, err := dialTCP(ctx, t.IP, t.Port, timeout, tcpProxy, fallbackDirect)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"github.com/kznLeaf/checkin/mmtls"
 )
 
 // run 执行完整流程：login_buffer → SESSION → code → ticket → 打卡。
@@ -45,7 +47,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (string, error) {
 
 	if opts.codeOnly {
 		// 只获取 code，获取成功之后马上退出
-		code, err := GetCode(ctx, loginBuffer, opts.appID)
+		code, err := mmtls.GetCode(ctx, loginBuffer, opts.appID)
 		if err != nil {
 			return "", fmt.Errorf("获取 code 失败: %w", err)
 		}
@@ -63,7 +65,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (string, error) {
 	}
 
 	// ③ 换 ticket：必须带 SESSION，否则 4006。
-	code, err := GetCode(ctx, loginBuffer, opts.appID)
+	code, err := mmtls.GetCode(ctx, loginBuffer, opts.appID)
 	if err != nil {
 		return "", fmt.Errorf("获取 code 失败: %w", err)
 	}

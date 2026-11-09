@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件是"用一段 login_buffer 换微信小程序登录 code"的最小实现。
 //
@@ -58,20 +58,20 @@ func GetCode(ctx context.Context, loginBuffer, appID string) (string, error) {
 	// ③ + ④ 长连接：握手成功后同一连接上跑一次 manualauth。
 	// 多个候选地址逐个尝试，通常第一个就成功。
 	var (
-		sess    AppSession
+		sess    appSession
 		psk     pskEntry
 		lastErr error
 	)
-	for _, target := range longTargets {
-		mc, err := connectMmtls(ctx, target, timeout, "", true)
+	for _, t := range longTargets {
+		mc, err := connectMmtls(ctx, t, timeout, "", true)
 		if err != nil {
-			lastErr = fmt.Errorf("连接 %s:%d 失败: %w", target.IP, target.Port, err)
+			lastErr = fmt.Errorf("连接 %s:%d 失败: %w", t.IP, t.Port, err)
 			continue
 		}
 		sess, psk, err = manualAuth(mc, loginBuffer, meta)
 		mc.close()
 		if err != nil {
-			lastErr = fmt.Errorf("manualauth(%s:%d) 失败: %w", target.IP, target.Port, err)
+			lastErr = fmt.Errorf("manualauth(%s:%d) 失败: %w", t.IP, t.Port, err)
 			continue
 		}
 		lastErr = nil
@@ -107,11 +107,11 @@ func GetCode(ctx context.Context, loginBuffer, appID string) (string, error) {
 // manualAuth 在一条已握手的 MMTLS 长连接上执行 manualauth：
 // 用 login_buffer 里的 ticket 登录，服务端返回 UIN、收发消息密钥和一张 access PSK，
 // 后者是随后 0-RTT 短连接复用会话的凭据。
-func manualAuth(mc *mmtlsClient, loginBuffer string, meta loginMeta) (AppSession, pskEntry, error) {
+func manualAuth(mc *mmtlsClient, loginBuffer string, meta loginMeta) (appSession, pskEntry, error) {
 	// app_device_id 每次登录随机生成，属于设备指纹的一部分。
 	appDeviceID, err := randomAppDeviceID()
 	if err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 
 	// 请求体是 HybridEcdh 加密的 protobuf，加密用的临时私钥/中间密钥留在 temp 里，
@@ -119,26 +119,26 @@ func manualAuth(mc *mmtlsClient, loginBuffer string, meta loginMeta) (AppSession
 	temp := &manualAuthTemp{}
 	body, err := buildLoginBody(loginBuffer, meta.DeviceID, appDeviceID, temp)
 	if err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 	if err = mc.sendApp(cmdManualAuth, body); err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 	resp, err := mc.recvApp()
 	if err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 	if resp.Cmd != cmdManualAuth {
-		return AppSession{}, pskEntry{}, fmt.Errorf("manualauth 响应 cmd 不匹配: %d", resp.Cmd)
+		return appSession{}, pskEntry{}, fmt.Errorf("manualauth 响应 cmd 不匹配: %d", resp.Cmd)
 	}
 
 	mar, err := parseLoginResponse(resp.Body, temp)
 	if err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 	sess, err := extractSession(mar)
 	if err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 	// 后续发包要用 login_buffer 里的 device_id，host_appid 用于 js-login 的宿主标识。
 	sess.DeviceID = meta.DeviceID
@@ -146,11 +146,11 @@ func manualAuth(mc *mmtlsClient, loginBuffer string, meta loginMeta) (AppSession
 
 	psks, err := mc.extractPSKs()
 	if err != nil {
-		return AppSession{}, pskEntry{}, err
+		return appSession{}, pskEntry{}, err
 	}
 	psk, ok := pickAccessPSK(psks)
 	if !ok {
-		return AppSession{}, pskEntry{}, fmt.Errorf("登录完成但服务端没有下发 access PSK")
+		return appSession{}, pskEntry{}, fmt.Errorf("登录完成但服务端没有下发 access PSK")
 	}
 	return sess, psk, nil
 }

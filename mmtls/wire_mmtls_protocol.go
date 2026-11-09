@@ -1,4 +1,4 @@
-package main
+package mmtls
 
 // 本文件是 MMTLS 的记录/握手报文编解码与常量定义。
 
