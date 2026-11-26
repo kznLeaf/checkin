@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -39,6 +40,9 @@ const (
 	xwebVersion   = "1500145"
 	sdkDate       = "20260902"
 )
+
+// errAlreadyCheckedIn 表示已经完成打卡
+var errAlreadyCheckedIn = errors.New("今日已完成打卡")
 
 // Checkin 用 ticket + SESSION 提交一次打卡，返回接口原始响应。
 //
@@ -127,6 +131,10 @@ func Checkin(ctx context.Context, sessionID, ticket, appID string, cfg Config) (
 	}
 	if err = json.Unmarshal(raw, &result); err != nil {
 		return text, fmt.Errorf("打卡响应不是合法 JSON: %s", snippet(raw))
+	}
+	// 如果在一次打卡之后重复运行，返回errAlreadyCheckedIn
+	if result.Code == 4006 && strings.Contains(result.Msg, "已完成打卡") {
+		return text, errAlreadyCheckedIn
 	}
 	if result.Code != 0 || !result.OK {
 		return text, fmt.Errorf("打卡未成功: code=%d msg=%s", result.Code, result.Msg)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,7 +13,7 @@ import (
 
 // run 执行完整流程：login_buffer → SESSION → code → ticket → 打卡。
 //
-// 每一步的错误都带上上下文返回给 main，由 main 负责将报错完整信息通知Telegram bot.
+// 每一步的错误都携带上下文返回给 main，由 main 负责将报错完整信息通知Telegram bot.
 //
 // 成功打卡时的典型返回值：{"code":0,"msg":"操作成功","data":true,"ok":true}
 func run(ctx context.Context, cfg Config, opts runOptions) (string, error) {
@@ -80,6 +81,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (string, error) {
 
 	result, err := Checkin(ctx, sessionID, ticket, opts.appID, cfg)
 	if err != nil {
+		if errors.Is(err, errAlreadyCheckedIn) {
+			return result, err
+		}
 		return result, fmt.Errorf("打卡失败: %w\n晚安成电服务端的响应: %s", err, result)
 	}
 	return result, nil

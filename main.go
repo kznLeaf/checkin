@@ -26,6 +26,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -75,7 +76,11 @@ func main() {
 		appID:     "wxaa78bf2905f01cee",
 	})
 	if err != nil {
-		log.Print(err)
+		// 已经执行过一次打卡之后，重复运行不通知Telegram
+		if errors.Is(err, errAlreadyCheckedIn) {
+			fmt.Println("今日已完成打卡")
+			return
+		}
 		if cfg.TelegramBot.Enabled() {
 			// 将错误信息通知给Telegram bot
 			t := currentTime()
@@ -88,6 +93,8 @@ func main() {
 		return
 	}
 
+	fmt.Println("成功打卡!")
+
 	if result != "" && cfg.TelegramBot.Enabled() {
 		// 拼接发送给 bot 的信息
 		message := fmt.Sprintf("%s 打卡成功\n服务端响应: %s",
@@ -96,6 +103,6 @@ func main() {
 		if err := sendTelegramMessage(cfg.TelegramBot.Token, cfg.TelegramBot.ChatID, message); err != nil {
 			log.Fatalf("发送 Telegram 消息失败: %v", err)
 		}
-		fmt.Println("上报本次打卡信息给bot")
+		fmt.Println("成功通知bot")
 	}
 }

@@ -8,9 +8,6 @@ package main
 //	position:
 //	  latitude: 12.123456
 //	  longitude: 123.123456
-//	time:
-//	  start: "21:00"
-//	  end: "22:30"
 //	mmwebid: 578                         # 微信 WebView 实例号，缺省随机
 //
 // 学号/密码/指纹用于 CAS 登录换 SESSION；position 用于打卡；mmwebid 用于伪造微信 UA。
@@ -33,11 +30,6 @@ type Config struct {
 		Latitude  float64 `yaml:"latitude"`
 		Longitude float64 `yaml:"longitude"`
 	} `yaml:"position"`
-	// NOTE: Time字段还没有被使用过，暂不加入自动定时打卡功能
-	Time struct {
-		Start string `yaml:"start"`
-		End   string `yaml:"end"`
-	} `yaml:"time"`
 	TelegramBot TelegramBotConfig `yaml:"telegram_bot"`
 }
 

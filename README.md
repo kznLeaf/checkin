@@ -14,8 +14,7 @@
 
 > browser_fingerprint 的获取方式：在 PC 端打开 F12 切换到 network 标签，访问 https://jzsz.uestc.edu.cn 找到发往 `https://idas.uestc.edu.cn/authserver/login` 的请求，在请求携带的 Cookies 中找到`MULTIFACTOR_BROWSER_FINGERPRINT`，复制其值。
 
-- `position`：上报给打卡接口
-- `time`: 预留，用于自动定时打卡，这个功能还没有实现，留个占位符即可。
+- `position`：上报给打卡接口，改成自己的位置
 - `mmwebid`: 三位或四位数字，用于 UA 头部，随便填写一个固定的数字即可。
 - `telegram_bot`(可选): 输入 Telegram bot 的`token`和`chatID`，获取`chatID`的方法见[这里](https://stackoverflow.com/questions/32423837/telegram-bot-how-to-get-a-group-chat-id)，打卡成功会推送一条 Telegram 通知。
 
