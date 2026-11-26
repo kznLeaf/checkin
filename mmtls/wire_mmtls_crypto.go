@@ -83,7 +83,7 @@ func nonce(iv []byte, seq uint64) []byte {
 	out := append([]byte(nil), iv...)
 	var s [8]byte
 	binary.BigEndian.PutUint64(s[:], seq)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		out[len(out)-8+i] ^= s[i]
 	}
 	return out

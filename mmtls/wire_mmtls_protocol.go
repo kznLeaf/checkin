@@ -240,11 +240,11 @@ func buildFinished(verifyData []byte) ([]byte, error) {
 
 func parseFinished(body []byte) ([]byte, error) {
 	if len(body) < 2 {
-		return nil, fmt.Errorf("Finished too short")
+		return nil, fmt.Errorf("finished too short")
 	}
 	n := int(binary.BigEndian.Uint16(body[:2]))
 	if 2+n > len(body) {
-		return nil, fmt.Errorf("Finished truncated")
+		return nil, fmt.Errorf("finished truncated")
 	}
 	return append([]byte(nil), body[2:2+n]...), nil
 }

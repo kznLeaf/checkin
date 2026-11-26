@@ -176,9 +176,9 @@ func fetchNewDNS(ctx context.Context, pathAndQuery string, timeout time.Duration
 
 // splitHTTP 把裸 HTTP 响应切成头部与正文；短连接的 0-RTT 响应就是这种形式。
 func splitHTTP(raw []byte) (string, []byte) {
-	idx := bytes.Index(raw, []byte("\r\n\r\n"))
-	if idx < 0 {
+	before, after, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	if !ok {
 		return "", raw
 	}
-	return string(raw[:idx]), raw[idx+4:]
+	return string(before), after
 }

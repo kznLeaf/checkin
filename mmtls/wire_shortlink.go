@@ -124,14 +124,12 @@ func send0RTTRaw(ctx context.Context, t target, entry pskEntry, recvKey, envelop
 func parse0RTTResponse(rbody, psk, pskCH, type8, recvKey []byte) ([]byte, []byte, error) {
 	recs, _ := parseRecords(rbody)
 	var sh []byte
-	var encHS [][]byte
 	var appdata []byte
 	for _, r := range recs {
 		if r.ContentType == ctHandshake {
 			if sh == nil {
 				sh = r.Payload
 			}
-			encHS = append(encHS, r.Payload)
 		}
 		if r.ContentType == ctAppData && appdata == nil {
 			appdata = r.Payload

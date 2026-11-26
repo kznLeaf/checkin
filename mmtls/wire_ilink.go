@@ -440,7 +440,7 @@ func sessionDecrypt(body, recvKey []byte) ([]byte, error) {
 		offsets = append(offsets, hlen)
 	}
 	limit := min(len(body), 220)
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		offsets = append(offsets, i)
 	}
 	seen := map[int]bool{}

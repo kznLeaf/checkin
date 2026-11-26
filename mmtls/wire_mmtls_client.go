@@ -257,7 +257,7 @@ func (m *mmtlsClient) recvServerFlight() error {
 
 func (m *mmtlsClient) sendClientFinished() error {
 	if m.hFinal == nil {
-		return fmt.Errorf("H_final is not ready")
+		return fmt.Errorf("h_final is not ready")
 	}
 	vd := finishedVerifyData(m.secret, true, m.hFinal)
 	msg, err := buildFinished(vd)
