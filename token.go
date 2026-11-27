@@ -1,10 +1,10 @@
 package main
 
-// 本文件管理应用宝 OAuth 的登录态（token）以及用它换 login_buffer。
+// 本文件管理应用宝 OAuth 的登录态（token）以及用它换 login_buffer 字符串
 //
 // 生命周期：
-//   - accesstoken 约 2 小时，过期后用 refreshtoken 续；
-//   - refreshtoken 是长期凭证，续期时服务端可能轮换它，所以每次都要写回文件；
+//   - accesstoken 约 2 小时，过期后用 refreshtoken 续期
+//   - refreshtoken 是长期凭证
 //   - login_buffer 由 accesstoken 换出，同样约 2 小时。
 //
 // 两个接口都要求 UAL 签名：md5(请求体 + 时间戳毫秒 + accessKey + nonce)。
@@ -96,7 +96,7 @@ func RefreshLoginBuffer(ctx context.Context, tokenFile string) (string, error) {
 	return fetchLoginBuffer(ctx, t)
 }
 
-// refreshAccessToken 调 pcyyb_refresh_token_auth 换新的 accesstoken（可能同时换 refreshtoken）。
+// refreshAccessToken 调 pcyyb_refresh_token_auth 换新的 accesstoken
 func refreshAccessToken(ctx context.Context, t *OAuthTokens) error {
 	if t.RefreshToken == "" {
 		return fmt.Errorf("token 文件缺少 refreshtoken，无法续期；请重新扫码")

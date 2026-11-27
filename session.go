@@ -1,16 +1,15 @@
 package main
 
-// 本文件是 faq-daily-checkin/src/faq_daily_checkin/login.py 的等价移植：
-// 用学号 + 密码登录学校 CAS（idas.uestc.edu.cn），换取 jzsz.uestc.edu.cn 的 SESSION cookie。
+// 用配置文件中的学号和密码登录学校统一身份认证平台（idas.uestc.edu.cn），
+// 换取 SESSION cookie，即用户个人的身份标识。
+// 服务端通过该 cookie 识别用户身份，因此在打卡请求中需要携带该cookie。
 //
-// 步骤、请求头、表单字段、正则、cookie 域与顺序都与 Python 版保持一致：
-//
-//	① GET  /authserver/login?service=https://jzsz.uestc.edu.cn/   取 execution / pwdEncryptSalt
-//	② 设置 MULTIFACTOR_BROWSER_FINGERPRINT（只对 idas 域名），加密密码后提交表单（禁止跟随 302）
-//	③ 跟随 302 的 Location 访问一次，从 cookie jar 里取 jzsz 域名下的 SESSION
+//	① 请求统一身份认证页面 GET  /authserver/login?service=https://jzsz.uestc.edu.cn/
+//    提取 execution / pwdEncryptSalt，这两个字符串用于提交登录表单;
+//	② 在请求中携带cookie: MULTIFACTOR_BROWSER_FINGERPRINT（针对 idas 域名），以便绕过二次验证，
+//    根据固定的算法加密密码后提交表单;
+//	③ 请求上一步 302 的目标地址，从 cookie 里取 session cookie
 //	④ GET  /api/isLoginFailure?_t=<毫秒>  激活 session
-//
-// 密码加密等价于 encrypt.js：64 位随机前缀 + 密码，AES-CBC/PKCS7（key=salt，iv=16 位随机），Base64。
 
 import (
 	"context"
@@ -35,7 +34,7 @@ const (
 	// 登录使用的 UA 不能随便改，否则第一步就会失败（疑似存在校验机制）。
 	loginUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
 
-	// CAS 前端加密用的字符集（与 encrypt.js 一致）。
+	// CAS 前端加密用的字符集，来自 encrypt.js
 	passwordCharset = "ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678"
 )
 
@@ -90,7 +89,7 @@ func GetSessionCookie(ctx context.Context, cfg Config) (string, error) {
 	}
 	fmt.Printf("成功获取 execution=%s, salt=%s\n", execution, salt)
 
-	// 只有访问 idas 时才需要携带 MULTIFACTOR_BROWSER_FINGERPRINT。
+	// 携带 MULTIFACTOR_BROWSER_FINGERPRINT 访问 idas，绕过二次验证
 	idasURL, _ := url.Parse(idasHost + "/")
 	jar.SetCookies(idasURL, []*http.Cookie{{
 		Name:  "MULTIFACTOR_BROWSER_FINGERPRINT",
@@ -98,7 +97,7 @@ func GetSessionCookie(ctx context.Context, cfg Config) (string, error) {
 		Path:  "/",
 	}})
 
-	// ② 加密密码并提交登录表单（禁止跟随重定向）。
+	// ② 加密密码并提交登录表单
 	fmt.Println("[2/4] 正在加密密码并提交登录...")
 	encrypted, err := encryptPassword(cfg.Password, salt)
 	if err != nil {
@@ -132,13 +131,15 @@ func GetSessionCookie(ctx context.Context, cfg Config) (string, error) {
 	if resp.StatusCode != http.StatusFound {
 		return "", fmt.Errorf("登录失败（HTTP %d），响应: %s", resp.StatusCode, snippet(submitBody))
 	}
+
+	// location 形如 https://jzsz.uestc.edu.cn/?ticket=xxxxxxx
 	location := resp.Header.Get("Location")
 	fmt.Printf("登录成功，获得重定向URL: %s\n", location)
 
-	// ③ 跟随重定向换取业务平台 SESSION。
+	// ③ 跟随重定向换取业务平台 SESSION
+	// 必须向重定向指向的目标 URL 发送一次请求， 否则下一步可能拿不到SESSION
 	fmt.Println("[3/4] 正在跟随重定向获取SESSION...")
-	redirectURL := resolveReference(loginURL, location)
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, redirectURL, nil)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 	if err != nil {
 		return "", err
 	}
@@ -157,13 +158,14 @@ func GetSessionCookie(ctx context.Context, cfg Config) (string, error) {
 	}
 	fmt.Printf("成功获取业务SESSION: %s\n", session)
 
-	// ④ 访问 /api/isLoginFailure 激活 session（真实浏览器也会先发这个请求）。
+	// ④真实用户通过浏览器访问 jzsz 时会先向 /api/isLoginFailure 发送请求
 	fmt.Println("[4/4] 激活 session cookie")
 	warmupURL := fmt.Sprintf("%s/api/isLoginFailure?_t=%d", jzszHost, time.Now().UnixMilli())
 	req, err = http.NewRequestWithContext(ctx, http.MethodGet, warmupURL, nil)
 	if err != nil {
 		return "", err
 	}
+
 	setBrowserHeaders(req)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
@@ -191,15 +193,26 @@ func GetSessionCookie(ctx context.Context, cfg Config) (string, error) {
 	return session, nil
 }
 
-// setBrowserHeaders 设置 Python 版 session.headers 里的默认三项。
 func setBrowserHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", loginUserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,en-US;q=0.9,en;q=0.8")
 }
 
-// encryptPassword 等价于 encrypt.js / encrypt.py 的 encryptPassword：
-// 64 位随机前缀 + 密码，AES-CBC/PKCS7（key=salt 16 字节，iv=16 位随机），Base64。
+// encryptPassword 对用户密码进行加密。
+//
+// 加密算法来自于访问身份认证页面时服务端发过来的 encrypt.js:
+//  1. 如果加密密钥(即salt)为空，直接返回原始密码 n
+//  2. 如果密钥不为空，生成一个长度为 64 的随机字符串，拼接在密码前面
+//  3. IV 是随机生成的长度 16 的字符串，因为真实密码从第五个 block 才开始， 所以IV根本不重要，占位即可
+//  4. 使用 AES-CBC 模式和 PKCS#7 填充加密
+//  5. 输出 Base64 编码的密文
+//  6. 如果加密过程中发生异常，encryptPassword 会捕获异常并返回原始密码
+//
+// 由于 AES CBC 的特性, 第 N 块密文的原始文本 = 第 N 块解密之后的数据块与 N-1 密文块异或
+// 所以无需知道 IV 和密码前的随机字符串也可以实现解密.
+//
+// salt 来自于登录页面的隐藏html元素，使用正则匹配就能获取
 func encryptPassword(password, salt string) (string, error) {
 	if len(salt) != aes.BlockSize {
 		return "", fmt.Errorf("pwdEncryptSalt 必须是 16 个字符，实际 %d", len(salt))
@@ -236,25 +249,12 @@ func randomString(n int) string {
 	return string(out)
 }
 
-// firstGroup 返回正则第一个捕获组，没有匹配时返回空串。
+// firstGroup 返回正则第一个匹配到的字符串组，没有匹配时返回空串。
 func firstGroup(re *regexp.Regexp, data []byte) string {
 	if m := re.FindSubmatch(data); len(m) == 2 {
 		return string(m[1])
 	}
 	return ""
-}
-
-// resolveReference 把 Location（可能是相对路径）解析成绝对地址。
-func resolveReference(base, ref string) string {
-	b, err := url.Parse(base)
-	if err != nil {
-		return ref
-	}
-	r, err := url.Parse(ref)
-	if err != nil {
-		return ref
-	}
-	return b.ResolveReference(r).String()
 }
 
 // cookieValue 从 cookie jar 里取指定 URL 作用域下的 cookie 值。

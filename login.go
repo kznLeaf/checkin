@@ -5,24 +5,27 @@ package main
 // 链路：
 //
 //	① GET  open.weixin.qq.com/connect/qrconnect
-//	        （appid=应用宝 PC 端的 wxd44977328b36e647，scope 含 snsapi_runtime_pcsdk）
-//	        → 从返回的 HTML 里取二维码 uuid
-//	② 下载 https://open.weixin.qq.com/connect/qrcode/<uuid> 的图片二维码，
-//	   用 gozxing 解出里面的 confirm 链接，再把这个链接渲染到终端（用户只需扫一次）
-//	③ 长轮询 long.open.weixin.qq.com/connect/l/qrconnect
-//	        wx_errcode: 408=未完成扫码 404=已扫未确认 405=已确认 403=取消 402=过期
-//	        405 时同时下发 wx_code
+//	        → 从返回的 HTML 里获取二维码 uuid
+//	② 下载 https://open.weixin.qq.com/connect/qrcode/<uuid> 文件（二维码图片）
+//	   用 gozxing 解出里面的登录用链接，再把这个链接渲染到终端供用户扫码
+//	③ 用户扫码状态轮询 long.open.weixin.qq.com/connect/l/qrconnect
+//	  - 408=未完成扫码
+// 	  - 404=已扫未确认
+//    - 405=已确认
+//    - 403=取消
+//    - 402=过期
+//	  - 405 时可以继续下发 wx_code
 //	④ GET  yybadaccess.3g.qq.com/pc_yyb/pcyyb_oauth?code=<wx_code>
-//	        → Set-Cookie 里给出 openid / accesstoken / refreshtoken
+//	        → 从头部的 Set-Cookie 里获取 openid / accesstoken / refreshtoken
 //	⑤ 用上一步的 token 换 login_buffer（fetchLoginBuffer，见 token.go）
 //
-// 返回的 OAuthTokens 由调用方落盘（-token-file），之后 -refresh 就能免扫码续期。
+// 返回的 token 都会报存到项目根目录下的./token.json，以后打卡就能直接复用已有的token，不需要扫码
 
 import (
 	"context"
 	"fmt"
 	"image"
-	_ "image/jpeg" // 微信 connect/qrcode 返回的是 JPEG
+	_ "image/jpeg"
 	_ "image/png"
 	"io"
 	"net/http"
@@ -94,9 +97,8 @@ func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 	// ② 终端打印二维码；同时给出链接，渲染失败时也能手动打开。
 	// get 该URL将会得到一个没有后缀的文件，这个其实忽略了后缀：.jpg
 	// 本质是一张用于扫码登录的二维码图片。
-	// 思路：获取该文件之后，手动重命名为jpg, 然后用 gozxing 解析获取其中包含的内容
-	// (内容示例 https://open.weixin.qq.com/connect/confirm?uuid=041pfLxH32iYkSSS)
-	// 最后将这个内容传入 printQRCode, 通过这种方式将二维码转移到终端打印出来
+	// 思路：获取该文件之后，手动重命名为jpg, 然后用 gozxing 解析获取其中包含的链接
+	// 最后将这个链接传给 printQRCode, 通过这种方式将登录二维码转移到终端打印出来
 	qrContent := wxQRCodeBase + uuid
 	if confirmURL, err := fetchQRCodeContent(ctx, client, qrContent); err == nil {
 		qrContent = confirmURL
@@ -109,7 +111,9 @@ func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 	// ③ 长轮询等待扫码。长轮询本身会挂 20~30 秒，所以单独用一个超时更长的 client。
 	pollClient := &http.Client{Timeout: 40 * time.Second}
 	deadline := time.Now().Add(qrLoginTimeout)
+
 	var wxCode string
+
 	for wxCode == "" {
 		if time.Now().After(deadline) {
 			return OAuthTokens{}, "", fmt.Errorf("二维码超过 %s 未确认，已超时", qrLoginTimeout)
@@ -186,10 +190,9 @@ func LoginForLoginBuffer(ctx context.Context) (OAuthTokens, string, error) {
 	}
 	openid, accessToken := cookies["openid"], cookies["accesstoken"]
 	if openid == "" || accessToken == "" {
-		return OAuthTokens{}, "", fmt.Errorf("OAuth 回调没有下发 openid/accesstoken")
+		return OAuthTokens{}, "", fmt.Errorf("OAuth 回调没有返回 openid/accesstoken")
 	}
 
-	// ⑤ 组装登录态：expires_in 取自回调 cookie，缺省按 2 小时。
 	expiresIn, _ := strconv.ParseInt(cookies["expires_in"], 10, 64)
 	if expiresIn <= 0 {
 		expiresIn = defaultTokenTTL
